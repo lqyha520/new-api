@@ -39,6 +39,69 @@ jobs:
           git fetch upstream main
 
       - name: Merge upstream
+        id: merge
         run: |
+          set -euo pipefail
+
+          upstream_sha=$(git rev-parse upstream/main)
+          base_sha=$(git merge-base HEAD upstream/main)
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Upstream is already merged; no notification needed."
+            exit 0
+          fi
+
+          commit_count=$(git rev-list --count "$base_sha..$upstream_sha")
+          commits=$(git log --no-merges --pretty=format:'- %h %s (%an)' "$base_sha..$upstream_sha" | head -n 20)
+          file_stats=$(git diff --stat "$base_sha..$upstream_sha" | head -n 40)
+          compare_url="https://github.com/QuantumNous/new-api/compare/$base_sha...$upstream_sha"
+
+          {
+            echo "【GitHub 上游同步】"
+            echo "仓库：lqyha520/new-api"
+            echo "状态：已合并并推送到 main"
+            echo "上游新增提交：$commit_count"
+            echo "上游范围：$base_sha -> $upstream_sha"
+            echo
+            echo "提交摘要："
+            printf '%s
+' "$commits"
+            echo
+            echo "文件变更统计："
+            printf '%s
+' "$file_stats"
+            echo
+            echo "查看完整差异：$compare_url"
+          } > "$RUNNER_TEMP/feishu-summary.txt"
+
           git merge upstream/main --no-edit
           git push origin main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Send Feishu change summary
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_RECEIVE_ID: ${{ secrets.FEISHU_RECEIVE_ID }}
+        run: |
+          set -euo pipefail
+
+          summary=$(cat "$RUNNER_TEMP/feishu-summary.txt")
+          auth_body=$(jq -nc --arg app_id "$FEISHU_APP_ID" --arg app_secret "$FEISHU_APP_SECRET" '{app_id: $app_id, app_secret: $app_secret}')
+          auth_response=$(curl --fail-with-body --silent --show-error -X POST -H "Content-Type: application/json; charset=utf-8" -d "$auth_body" "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal")
+          tenant_access_token=$(printf '%s' "$auth_response" | jq -r '.tenant_access_token // empty')
+          if [ -z "$tenant_access_token" ]; then
+            echo "Feishu authentication failed." >&2
+            exit 1
+          fi
+
+          message_content=$(jq -nc --arg text "$summary" '{text: $text}')
+          message_body=$(jq -nc --arg receive_id "$FEISHU_RECEIVE_ID" --arg content "$message_content" '{receive_id: $receive_id, msg_type: "text", content: $content}')
+          send_response=$(curl --fail-with-body --silent --show-error -X POST -H "Authorization: Bearer $tenant_access_token" -H "Content-Type: application/json; charset=utf-8" -d "$message_body" "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id")
+          send_code=$(printf '%s' "$send_response" | jq -r '.code // -1')
+          if [ "$send_code" != "0" ]; then
+            echo "Feishu notification failed." >&2
+            exit 1
+          fi
