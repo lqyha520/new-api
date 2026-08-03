@@ -9,8 +9,8 @@ services:
     ports:
       - "${NEW_API_PORT:-3001}:3000"
     volumes:
-      - /opt/new-api/data:/data
-      - /opt/new-api/logs:/app/logs
+      - /opt/new-api-runtime/data:/data
+      - /opt/new-api-runtime/logs:/app/logs
     environment:
       SQL_DSN: ${SQL_DSN}
       REDIS_CONN_STRING: ${REDIS_CONN_STRING}
