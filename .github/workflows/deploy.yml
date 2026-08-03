@@ -1,0 +1,39 @@
+name: Deploy to server
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy latest main to server
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -eu
+            cd /opt/new-api
+            git fetch origin main
+            git checkout --force main
+            git reset --hard origin/main
+            docker compose -p new-api -f docker-compose.deploy.yml --env-file .env up -d --build --remove-orphans
+            docker image prune -f
+            for i in $(seq 1 30); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' new-api-new-api-1 2>/dev/null || true)
+              if [ "$status" = healthy ]; then exit 0; fi
+              sleep 5
+            done
+            docker compose -p new-api -f docker-compose.deploy.yml ps
+            exit 1
