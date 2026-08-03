@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: sync-upstream
@@ -76,6 +77,12 @@ jobs:
           git merge upstream/main --no-edit
           git push origin main
           echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy synced upstream changes
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy.yml --ref main
 
       - name: Send Feishu change summary
         if: steps.merge.outputs.changed == 'true'
