@@ -65,12 +65,10 @@ jobs:
             echo "上游范围：$base_sha -> $upstream_sha"
             echo
             echo "提交摘要："
-            printf '%s
-' "$commits"
+            echo "$commits"
             echo
             echo "文件变更统计："
-            printf '%s
-' "$file_stats"
+            echo "$file_stats"
             echo
             echo "查看完整差异：$compare_url"
           } > "$RUNNER_TEMP/feishu-summary.txt"
