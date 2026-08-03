@@ -53,8 +53,8 @@ jobs:
           fi
 
           commit_count=$(git rev-list --count "$base_sha..$upstream_sha")
-          commits=$(git log --no-merges --pretty=format:'- %h %s (%an)' "$base_sha..$upstream_sha" | head -n 20)
-          file_stats=$(git diff --stat "$base_sha..$upstream_sha" | head -n 40)
+          commits=$(git log --no-merges --pretty=format:'- %h %s (%an)' "$base_sha..$upstream_sha" | sed -n '1,20p')
+          file_stats=$(git diff --stat "$base_sha..$upstream_sha" | sed -n '1,40p')
           compare_url="https://github.com/QuantumNous/new-api/compare/$base_sha...$upstream_sha"
 
           {
