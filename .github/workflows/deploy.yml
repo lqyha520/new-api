@@ -17,35 +17,35 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v5
 
-      - name: Upload source to server
-        uses: appleboy/scp-action@v1
+      - name: Install deployment key
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
-          source: "."
-          target: /opt/new-api
-          rm: true
-          overwrite: true
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
 
-      - name: Build and deploy on server
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
-          script_stop: true
-          script: |
-            set -eu
+      - name: Package, upload, and deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -eu
+          port="${DEPLOY_PORT:-22}"
+          archive="$RUNNER_TEMP/new-api-${GITHUB_SHA}.tar.gz"
+          tar --exclude=.git -czf "$archive" .
+          ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          scp -P "$port" "$archive" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/new-api-${GITHUB_SHA}.tar.gz"
+          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" "set -eu
+            rm -rf /opt/new-api
+            mkdir -p /opt/new-api
+            tar -xzf /tmp/new-api-${GITHUB_SHA}.tar.gz -C /opt/new-api
+            rm -f /tmp/new-api-${GITHUB_SHA}.tar.gz
             cd /opt/new-api
             docker compose -p new-api -f docker-compose.deploy.yml --env-file /opt/new-api-runtime/.env up -d --build --remove-orphans
             docker image prune -f
             for i in $(seq 1 30); do
               status=$(docker inspect --format='{{.State.Health.Status}}' new-api-new-api-1 2>/dev/null || true)
-              if [ "$status" = healthy ]; then exit 0; fi
+              if [ \"$status\" = healthy ]; then exit 0; fi
               sleep 5
             done
             docker compose -p new-api -f docker-compose.deploy.yml ps
-            exit 1
+            exit 1"
