@@ -59,7 +59,13 @@ jobs:
           set -eu
           port="${DEPLOY_PORT:-22}"
           ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
-          scp -P "$port" docker-compose.deploy.yml "$DEPLOY_USER@$DEPLOY_HOST:/opt/new-api/docker-compose.deploy.yml"
+          for attempt in 1 2 3; do
+            if scp -o ConnectTimeout=15 -o ServerAliveInterval=30 -P "$port" docker-compose.deploy.yml "$DEPLOY_USER@$DEPLOY_HOST:/opt/new-api/docker-compose.deploy.yml"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 5
+          done
           ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" <<'REMOTE'
             set -eu
             sha="$1"
