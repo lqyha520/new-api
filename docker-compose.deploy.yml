@@ -1,9 +1,6 @@
 services:
   new-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: new-api-local:latest
+    image: ${NEW_API_IMAGE:-ghcr.io/lqyha520/new-api:main}
     restart: always
     command: --log-dir /app/logs
     ports:
