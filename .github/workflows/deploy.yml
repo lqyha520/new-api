@@ -55,19 +55,20 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           port="${DEPLOY_PORT:-22}"
           ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
           scp -P "$port" docker-compose.deploy.yml "$DEPLOY_USER@$DEPLOY_HOST:/opt/new-api/docker-compose.deploy.yml"
-          printf '%s' "$GHCR_TOKEN" | ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" docker login ghcr.io -u "$GHCR_USER" --password-stdin
-          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" <<'REMOTE'
             set -eu
+            sha="$1"
+            env_file=/opt/new-api-runtime/.env
+            sed -i '/^NEW_API_IMAGE=/d' "$env_file"
+            printf 'NEW_API_IMAGE=ghcr.nju.edu.cn/lqyha520/new-api:%s\n' "$sha" >> "$env_file"
             cd /opt/new-api
-            docker compose -p new-api -f docker-compose.deploy.yml --env-file /opt/new-api-runtime/.env pull new-api
-            docker compose -p new-api -f docker-compose.deploy.yml --env-file /opt/new-api-runtime/.env up -d --no-build --remove-orphans
+            docker compose -p new-api -f docker-compose.deploy.yml --env-file "$env_file" pull new-api
+            docker compose -p new-api -f docker-compose.deploy.yml --env-file "$env_file" up -d --no-build --remove-orphans
             docker image prune -f
             for i in $(seq 1 30); do
               status=$(docker inspect --format='{{.State.Health.Status}}' new-api-new-api-1 2>/dev/null || true)
