@@ -13,7 +13,6 @@ on:
 permissions:
   contents: write
   actions: write
-  workflows: write
 
 concurrency:
   group: sync-upstream
@@ -29,6 +28,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
+          token: ${{ secrets.SYNC_TOKEN }}
 
       - name: Configure Git
         run: |
@@ -82,7 +82,7 @@ jobs:
       - name: Deploy synced upstream changes
         if: steps.merge.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: gh workflow run deploy.yml --ref main
 
       - name: Send Feishu change summary
