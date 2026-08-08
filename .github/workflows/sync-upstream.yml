@@ -83,7 +83,7 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
-        run: gh workflow run deploy.yml --ref main
+        run: gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY" --ref main
 
       - name: Send Feishu change summary
         if: steps.merge.outputs.changed == 'true'
