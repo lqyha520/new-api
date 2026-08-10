@@ -1,0 +1,107 @@
+name: Notify backup status
+
+on:
+  schedule:
+    # 04:30 Asia/Shanghai, after the 03:17 backup and secondary restore window.
+    - cron: "30 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notify-backup
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install deployment key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Refresh backup scripts on servers
+        continue-on-error: true
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -eu
+          port="${DEPLOY_PORT:-22}"
+          ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          scp -P "$port" ops/new-api-backup-to-117.sh ops/new-api-secondary-restore.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
+          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "install -m 700 /tmp/new-api-backup-to-117.sh /usr/local/sbin/new-api-backup-to-117.sh; \
+             install -m 700 /tmp/new-api-secondary-restore.sh /tmp/new-api-secondary-restore.sh; \
+             scp -q -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
+               /tmp/new-api-secondary-restore.sh root@117.72.63.24:/usr/local/sbin/new-api-secondary-restore.sh; \
+             chmod 700 /usr/local/sbin/new-api-secondary-restore.sh"
+
+      - name: Read backup status from servers
+        id: status
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          if ! report=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+            set -eu
+            backup_status=/opt/new-api-runtime/backups/last-backup.status
+            restore_status=/opt/new-api-backups/state/last-restore.status
+            if [ -f "$backup_status" ]; then cat "$backup_status"; else echo "status=missing"; fi
+            echo "---"
+            if [ -f "$restore_status" ]; then cat "$restore_status"; else echo "status=missing"; fi
+          REMOTE
+          ); then
+            report=$(printf '%s\n---\n%s\n' 'status=unreachable' 'status=unreachable')
+          fi
+          printf '%s\n' "$report" > "$RUNNER_TEMP/backup-report.txt"
+          cat "$RUNNER_TEMP/backup-report.txt"
+          backup_status=$(awk -F= '$1 == "status" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
+          restore_status=$(awk -F= '/^---$/ { section=1; next } section && $1 == "status" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
+          restore_marker=$(awk -F= '/^---$/ { section=1; next } section && $1 == "restored" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
+          dump_name=$(awk -F= '$1 == "dump_name" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
+          expected_restore="${dump_name%.dump}"
+          result=success
+          if [ "$backup_status" != success ] || [ "$restore_status" != success ] || [ "$restore_marker" != "$expected_restore" ]; then
+            result=failure
+          fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Send Feishu notification
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_RECEIVE_ID: ${{ secrets.FEISHU_RECEIVE_ID }}
+          BACKUP_RESULT: ${{ steps.status.outputs.result }}
+        run: |
+          set -euo pipefail
+          summary=$(cat "$RUNNER_TEMP/backup-report.txt")
+          auth_body=$(jq -nc --arg app_id "$FEISHU_APP_ID" --arg app_secret "$FEISHU_APP_SECRET" '{app_id: $app_id, app_secret: $app_secret}')
+          auth_response=$(curl --fail-with-body --silent --show-error -X POST \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$auth_body" \
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal")
+          tenant_access_token=$(printf '%s' "$auth_response" | jq -r '.tenant_access_token // empty')
+          [ -n "$tenant_access_token" ]
+          title="New API 每日备份通知"
+          [ "$BACKUP_RESULT" = success ] && title="New API 每日备份成功" || title="New API 每日备份失败"
+          message=$(printf '%s\n\n%s' "$title" "$summary")
+          message_content=$(jq -nc --arg text "$message" '{text: $text}')
+          message_body=$(jq -nc --arg receive_id "$FEISHU_RECEIVE_ID" --arg content "$message_content" '{receive_id: $receive_id, msg_type: "text", content: $content}')
+          send_response=$(curl --fail-with-body --silent --show-error -X POST \
+            -H "Authorization: Bearer $tenant_access_token" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$message_body" \
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id")
+          [ "$(printf '%s' "$send_response" | jq -r '.code // -1')" = 0 ]
