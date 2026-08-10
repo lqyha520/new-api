@@ -31,17 +31,6 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY }}
 
-      - name: Show backup public key for repair
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_backup == true }}
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-        run: |
-          port="${DEPLOY_PORT:-22}"
-          ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
-          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" cat /root/.ssh/new-api-backup_ed25519.pub
-
       - name: Refresh backup scripts on servers
         continue-on-error: true
         env:
@@ -93,6 +82,17 @@ jobs:
           ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
             "ssh -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
               root@117.72.63.24 /usr/local/sbin/new-api-secondary-restore.sh"
+          expected=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sed -n 's/^dump_name=//p' /opt/new-api-runtime/backups/last-backup.status")
+          expected="${expected%.dump}"
+          for attempt in $(seq 1 12); do
+            restored=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "sed -n 's/^restored=//p' /opt/new-api-backups/state/last-restore.status 2>/dev/null || true")
+            [ "$restored" = "$expected" ] && exit 0
+            sleep 5
+          done
+          echo "Standby restore did not report $expected" >&2
+          exit 1
 
       - name: Read backup status from servers
         id: status
