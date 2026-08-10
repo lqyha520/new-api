@@ -5,6 +5,12 @@ on:
     # 04:30 Asia/Shanghai, after the 03:17 backup and secondary restore window.
     - cron: "30 20 * * *"
   workflow_dispatch:
+    inputs:
+      run_backup:
+        description: "Run the backup immediately before notifying"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,6 +49,22 @@ jobs:
              scp -q -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
                /tmp/new-api-secondary-restore.sh root@117.72.63.24:/usr/local/sbin/new-api-secondary-restore.sh; \
              chmod 700 /usr/local/sbin/new-api-secondary-restore.sh"
+
+      - name: Run backup now (manual)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_backup == true }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" /usr/local/sbin/new-api-backup-to-117.sh
+          # Let the secondary restore job's two-minute partial-upload guard expire.
+          sleep 135
+          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "ssh -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
+              root@117.72.63.24 /usr/local/sbin/new-api-secondary-restore.sh"
 
       - name: Read backup status from servers
         id: status
