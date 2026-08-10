@@ -41,6 +41,23 @@ jobs:
           set -eu
           port="${DEPLOY_PORT:-22}"
           ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          ssh-keyscan -H 117.72.63.24 >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          if ! ssh -o BatchMode=yes root@117.72.63.24 true 2>/dev/null; then
+            ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+              set -eu
+              pub=$(cat /root/.ssh/new-api-backup_ed25519.pub)
+              for candidate in /root/.ssh/new-api-deploy /root/.ssh/codex-new-api-deploy /root/.ssh/codex_xianyu_deploy_ed25519; do
+                [ -f "$candidate" ] || continue
+                if ssh -i "$candidate" -o BatchMode=yes root@117.72.63.24 true 2>/dev/null; then
+                  printf '%s\n' "from=\"160.202.47.241\",no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty $pub" | \
+                    ssh -i "$candidate" -o BatchMode=yes root@117.72.63.24 'cat >> /root/.ssh/authorized_keys'
+                  exit 0
+                fi
+              done
+              echo "No existing primary-to-standby key can repair backup access." >&2
+              exit 1
+            REMOTE
+          fi
           scp -P "$port" ops/new-api-backup-to-117.sh ops/new-api-secondary-restore.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
           ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
