@@ -44,8 +44,8 @@ jobs:
           scp -P "$port" ops/new-api-backup-to-117.sh ops/new-api-secondary-restore.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
           ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "install -m 700 /tmp/new-api-backup-to-117.sh /usr/local/sbin/new-api-backup-to-117.sh; \
-             install -m 700 /tmp/new-api-secondary-restore.sh /tmp/new-api-secondary-restore.sh; \
+            "set -eu; \
+             install -m 700 /tmp/new-api-backup-to-117.sh /usr/local/sbin/new-api-backup-to-117.sh; \
              scp -q -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
                /tmp/new-api-secondary-restore.sh root@117.72.63.24:/usr/local/sbin/new-api-secondary-restore.sh; \
              chmod 700 /usr/local/sbin/new-api-secondary-restore.sh"
