@@ -46,9 +46,10 @@ jobs:
           ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu; \
              install -m 700 /tmp/new-api-backup-to-117.sh /usr/local/sbin/new-api-backup-to-117.sh; \
-             scp -q -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
+             scp -q -P 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
                /tmp/new-api-secondary-restore.sh root@117.72.63.24:/usr/local/sbin/new-api-secondary-restore.sh; \
-             chmod 700 /usr/local/sbin/new-api-secondary-restore.sh"
+             ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
+               root@117.72.63.24 chmod 700 /usr/local/sbin/new-api-secondary-restore.sh"
 
       - name: Run backup now (manual)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_backup == true }}
@@ -63,14 +64,14 @@ jobs:
           # Let the secondary restore job's two-minute partial-upload guard expire.
           sleep 135
           ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "ssh -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
+            "ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
               root@117.72.63.24 /usr/local/sbin/new-api-secondary-restore.sh"
           expected=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
             "sed -n 's/^dump_name=//p' /opt/new-api-runtime/backups/last-backup.status")
           expected="${expected%.dump}"
           for attempt in $(seq 1 12); do
             restored=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "ssh -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 \
+              "ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 \
                 'sed -n \"s/^restored=//p\" /opt/new-api-backups/state/last-restore.status 2>/dev/null || true'")
             [ "$restored" = "$expected" ] && exit 0
             sleep 5
@@ -94,8 +95,8 @@ jobs:
             if [ -f "$backup_status" ]; then cat "$backup_status"; else echo "status=missing"; fi
             echo "---"
             restore_status=/opt/new-api-backups/state/last-restore.status
-            if ssh -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 "test -f '$restore_status'" 2>/dev/null; then
-              ssh -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 "cat '$restore_status'"
+            if ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 "test -f '$restore_status'" 2>/dev/null; then
+              ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 "cat '$restore_status'"
             else
               echo "status=missing"
             fi

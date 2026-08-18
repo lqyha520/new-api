@@ -5,6 +5,7 @@ umask 077
 
 primary_container="new-api-postgres-1"
 secondary="root@117.72.63.24"
+secondary_port="22222"
 ssh_key="/root/.ssh/new-api-backup_ed25519"
 local_root="/opt/new-api-runtime/backups"
 remote_root="/opt/new-api-backups"
@@ -46,7 +47,7 @@ tar -czf "$config_file" \
 
 stage="upload"
 for attempt in 1 2 3 4 5; do
-  if scp -i "$ssh_key" -o BatchMode=yes -o ConnectTimeout=20 \
+  if scp -P "$secondary_port" -i "$ssh_key" -o BatchMode=yes -o ConnectTimeout=20 \
     -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
     "$dump_file" "$config_file" "$secondary:$remote_root/incoming/"; then
     break
