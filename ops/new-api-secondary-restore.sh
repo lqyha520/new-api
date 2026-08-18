@@ -9,10 +9,13 @@ archives="$root/archives"
 state="$root/state"
 container="new-api-postgres-1"
 status_file="$state/last-restore.status"
+stage="starting"
 
 mark_failed() {
   printf '%s\n' \
     "status=failed" \
+    "stage=$stage" \
+    "error=${BASH_COMMAND:-unknown}" \
     "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$status_file"
 }
 trap mark_failed ERR
@@ -25,10 +28,13 @@ stamp="$(basename "$dump_file" .dump)"
 marker="$state/last-restored"
 [ "$(cat "$marker" 2>/dev/null || true)" = "$stamp" ] && exit 0
 
+stage="copy_dump"
 docker cp "$dump_file" "$container:/tmp/$stamp.dump"
+stage="pg_restore"
 docker exec "$container" pg_restore \
   --clean --if-exists --no-owner --exit-on-error \
   -U root -d new-api "/tmp/$stamp.dump"
+stage="archive"
 docker exec "$container" rm -f "/tmp/$stamp.dump"
 
 mv "$dump_file" "$archives/"
