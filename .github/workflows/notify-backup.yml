@@ -70,6 +70,13 @@ jobs:
 
           restore=$(ssh -p "$SECONDARY_PORT" "root@$SECONDARY_HOST" \
             'cat /opt/new-api-backups/state/last-restore.status 2>/dev/null || true')
+          expected_restore="${dump_name%.dump}"
+          printf '%s\n' "$restore" | grep -qx 'status=success'
+          printf '%s\n' "$restore" | grep -qx "restored=$expected_restore"
+          ssh -p "$primary_port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sed -i 's/^transfer=pending$/transfer=github_actions/' /opt/new-api-runtime/backups/last-backup.status"
+          ssh -p "$primary_port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            'cat /opt/new-api-runtime/backups/last-backup.status' > "$RUNNER_TEMP/primary-status.txt"
           printf '%s\n' "$restore" > "$RUNNER_TEMP/restore-status.txt"
           cat "$RUNNER_TEMP/primary-status.txt"
           cat "$RUNNER_TEMP/restore-status.txt"
