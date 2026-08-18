@@ -40,10 +40,11 @@ jobs:
         run: |
           set -eu
           port="${DEPLOY_PORT:-22}"
-          ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
-          scp -P "$port" ops/new-api-backup-to-117.sh ops/new-api-secondary-restore.sh \
+          ssh-keyscan -T 10 -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          scp -P "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+            ops/new-api-backup-to-117.sh ops/new-api-secondary-restore.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
-          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu; \
              install -m 700 /tmp/new-api-backup-to-117.sh /usr/local/sbin/new-api-backup-to-117.sh; \
              scp -q -P 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
@@ -60,17 +61,18 @@ jobs:
         run: |
           set -euo pipefail
           port="${DEPLOY_PORT:-22}"
-          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" /usr/local/sbin/new-api-backup-to-117.sh
+          ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+            "$DEPLOY_USER@$DEPLOY_HOST" /usr/local/sbin/new-api-backup-to-117.sh
           # Let the secondary restore job's two-minute partial-upload guard expire.
           sleep 135
-          ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
             "ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
               root@117.72.63.24 /usr/local/sbin/new-api-secondary-restore.sh"
-          expected=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+          expected=$(ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
             "sed -n 's/^dump_name=//p' /opt/new-api-runtime/backups/last-backup.status")
           expected="${expected%.dump}"
           for attempt in $(seq 1 12); do
-            restored=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            restored=$(ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
               "ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 \
                 'sed -n \"s/^restored=//p\" /opt/new-api-backups/state/last-restore.status 2>/dev/null || true'")
             [ "$restored" = "$expected" ] && exit 0
@@ -88,8 +90,8 @@ jobs:
         run: |
           set -euo pipefail
           port="${DEPLOY_PORT:-22}"
-          ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
-          if ! report=$(ssh -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+          ssh-keyscan -T 10 -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          if ! report=$(ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
             set -eu
             backup_status=/opt/new-api-runtime/backups/last-backup.status
             if [ -f "$backup_status" ]; then cat "$backup_status"; else echo "status=missing"; fi
