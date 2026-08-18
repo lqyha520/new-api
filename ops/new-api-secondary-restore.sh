@@ -21,7 +21,11 @@ mark_failed() {
 trap mark_failed ERR
 
 mkdir -p "$incoming" "$archives" "$state"
-dump_file="$(find "$incoming" -maxdepth 1 -type f -name 'new-api-*.dump' -mmin +2 -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- || true)"
+if [ "${RESTORE_FORCE:-0}" = "1" ]; then
+  dump_file="$(find "$incoming" -maxdepth 1 -type f -name 'new-api-*.dump' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- || true)"
+else
+  dump_file="$(find "$incoming" -maxdepth 1 -type f -name 'new-api-*.dump' -mmin +2 -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- || true)"
+fi
 [ -n "$dump_file" ] || exit 0
 
 stamp="$(basename "$dump_file" .dump)"

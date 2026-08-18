@@ -1,16 +1,9 @@
-name: Notify backup status
+name: Backup and notify
 
 on:
   schedule:
-    # 04:30 Asia/Shanghai, after the 03:17 backup and secondary restore window.
     - cron: "30 20 * * *"
   workflow_dispatch:
-    inputs:
-      run_backup:
-        description: "Run the backup immediately before notifying"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -20,129 +13,84 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  notify:
+  backup:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install deployment key
+      - name: Install SSH keys
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-private-key: |
+            ${{ secrets.DEPLOY_KEY }}
+            ${{ secrets.SECONDARY_DEPLOY_KEY }}
 
-      - name: Refresh backup scripts on servers
-        continue-on-error: true
+      - name: Run backup on primary and relay to secondary
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-        run: |
-          set -eu
-          port="${DEPLOY_PORT:-22}"
-          ssh-keyscan -T 10 -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
-          scp -P "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
-            ops/new-api-backup-to-117.sh ops/new-api-secondary-restore.sh \
-            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/"
-          ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; \
-             install -m 700 /tmp/new-api-backup-to-117.sh /usr/local/sbin/new-api-backup-to-117.sh; \
-             scp -q -P 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
-               /tmp/new-api-secondary-restore.sh root@117.72.63.24:/usr/local/sbin/new-api-secondary-restore.sh; \
-             ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
-               root@117.72.63.24 chmod 700 /usr/local/sbin/new-api-secondary-restore.sh"
-
-      - name: Run backup now (manual)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_backup == true }}
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          SECONDARY_HOST: 117.72.63.24
+          SECONDARY_PORT: 22
         run: |
           set -euo pipefail
-          port="${DEPLOY_PORT:-22}"
-          ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
-            "$DEPLOY_USER@$DEPLOY_HOST" /usr/local/sbin/new-api-backup-to-117.sh
-          # Let the secondary restore job's two-minute partial-upload guard expire.
-          sleep 135
-          ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
-            "ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes \
-              root@117.72.63.24 /usr/local/sbin/new-api-secondary-restore.sh"
-          expected=$(ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sed -n 's/^dump_name=//p' /opt/new-api-runtime/backups/last-backup.status")
-          expected="${expected%.dump}"
-          for attempt in $(seq 1 12); do
-            restored=$(ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" \
-              "ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 \
-                'sed -n \"s/^restored=//p\" /opt/new-api-backups/state/last-restore.status 2>/dev/null || true'")
-            [ "$restored" = "$expected" ] && exit 0
-            sleep 5
-          done
-          echo "Standby restore did not report $expected" >&2
-          exit 1
+          primary_port="${DEPLOY_PORT:-22}"
+          ssh-keyscan -T 10 -p "$primary_port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          ssh-keyscan -T 10 -p "$SECONDARY_PORT" -H "$SECONDARY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
 
-      - name: Read backup status from servers
-        id: status
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-        run: |
-          set -euo pipefail
-          port="${DEPLOY_PORT:-22}"
-          ssh-keyscan -T 10 -p "$port" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
-          if ! report=$(ssh -p "$port" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
-            set -eu
-            backup_status=/opt/new-api-runtime/backups/last-backup.status
-            if [ -f "$backup_status" ]; then cat "$backup_status"; else echo "status=missing"; fi
-            echo "---"
-            restore_status=/opt/new-api-backups/state/last-restore.status
-            if ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 "test -f '$restore_status'" 2>/dev/null; then
-              ssh -p 22222 -i /root/.ssh/new-api-backup_ed25519 -o BatchMode=yes root@117.72.63.24 "cat '$restore_status'"
-            else
-              echo "status=missing"
-            fi
-          REMOTE
-          ); then
-            report=$(printf '%s\n---\n%s\n' 'status=unreachable' 'status=unreachable')
-          fi
-          printf '%s\n' "$report" > "$RUNNER_TEMP/backup-report.txt"
-          cat "$RUNNER_TEMP/backup-report.txt"
-          backup_status=$(awk -F= '$1 == "status" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
-          restore_status=$(awk -F= '/^---$/ { section=1; next } section && $1 == "status" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
-          restore_marker=$(awk -F= '/^---$/ { section=1; next } section && $1 == "restored" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
-          dump_name=$(awk -F= '$1 == "dump_name" { print $2; exit }' "$RUNNER_TEMP/backup-report.txt")
-          expected_restore="${dump_name%.dump}"
-          result=success
-          if [ "$backup_status" != success ] || [ "$restore_status" != success ] || [ "$restore_marker" != "$expected_restore" ]; then
-            result=failure
-          fi
-          echo "result=$result" >> "$GITHUB_OUTPUT"
+          scp -P "$primary_port" -o ConnectTimeout=15 ops/new-api-backup-to-117.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/new-api-backup-to-117.sh"
+          ssh -p "$primary_port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            'install -m 700 /tmp/new-api-backup-to-117.sh /usr/local/sbin/new-api-backup-to-117.sh; \
+             BACKUP_LOCAL_ONLY=1 /usr/local/sbin/new-api-backup-to-117.sh'
+
+          status=$(ssh -p "$primary_port" "$DEPLOY_USER@$DEPLOY_HOST" \
+            'cat /opt/new-api-runtime/backups/last-backup.status')
+          printf '%s\n' "$status" > "$RUNNER_TEMP/primary-status.txt"
+          dump_name=$(printf '%s\n' "$status" | sed -n 's/^dump_name=//p')
+          config_name=$(printf '%s\n' "$status" | sed -n 's/^config_name=//p')
+          test -n "$dump_name"
+          test -n "$config_name"
+
+          scp -P "$primary_port" -o ConnectTimeout=15 \
+            "$DEPLOY_USER@$DEPLOY_HOST:/opt/new-api-runtime/backups/$dump_name" \
+            "$DEPLOY_USER@$DEPLOY_HOST:/opt/new-api-runtime/backups/$config_name" \
+            "$RUNNER_TEMP/"
+
+          scp -P "$SECONDARY_PORT" -o ConnectTimeout=15 \
+            ops/new-api-secondary-restore.sh \
+            "root@$SECONDARY_HOST:/tmp/new-api-secondary-restore.sh"
+          scp -P "$SECONDARY_PORT" -o ConnectTimeout=15 \
+            "$RUNNER_TEMP/$dump_name" "$RUNNER_TEMP/$config_name" \
+            "root@$SECONDARY_HOST:/opt/new-api-backups/incoming/"
+          ssh -p "$SECONDARY_PORT" "root@$SECONDARY_HOST" \
+            'install -m 700 /tmp/new-api-secondary-restore.sh /usr/local/sbin/new-api-secondary-restore.sh; \
+             RESTORE_FORCE=1 /usr/local/sbin/new-api-secondary-restore.sh'
+
+          restore=$(ssh -p "$SECONDARY_PORT" "root@$SECONDARY_HOST" \
+            'cat /opt/new-api-backups/state/last-restore.status 2>/dev/null || true')
+          printf '%s\n' "$restore" > "$RUNNER_TEMP/restore-status.txt"
+          cat "$RUNNER_TEMP/primary-status.txt"
+          cat "$RUNNER_TEMP/restore-status.txt"
 
       - name: Send Feishu notification
+        if: always()
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_RECEIVE_ID: ${{ secrets.FEISHU_RECEIVE_ID }}
-          BACKUP_RESULT: ${{ steps.status.outputs.result }}
         run: |
           set -euo pipefail
-          summary=$(cat "$RUNNER_TEMP/backup-report.txt")
-          auth_body=$(jq -nc --arg app_id "$FEISHU_APP_ID" --arg app_secret "$FEISHU_APP_SECRET" '{app_id: $app_id, app_secret: $app_secret}')
-          auth_response=$(curl --fail-with-body --silent --show-error -X POST \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "$auth_body" \
-            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal")
-          tenant_access_token=$(printf '%s' "$auth_response" | jq -r '.tenant_access_token // empty')
-          [ -n "$tenant_access_token" ]
-          title="New API 每日备份通知"
-          [ "$BACKUP_RESULT" = success ] && title="New API 每日备份成功" || title="New API 每日备份失败"
-          message=$(printf '%s\n\n%s' "$title" "$summary")
-          message_content=$(jq -nc --arg text "$message" '{text: $text}')
-          message_body=$(jq -nc --arg receive_id "$FEISHU_RECEIVE_ID" --arg content "$message_content" '{receive_id: $receive_id, msg_type: "text", content: $content}')
-          send_response=$(curl --fail-with-body --silent --show-error -X POST \
-            -H "Authorization: Bearer $tenant_access_token" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "$message_body" \
-            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id")
-          [ "$(printf '%s' "$send_response" | jq -r '.code // -1')" = 0 ]
+          primary=$(cat "$RUNNER_TEMP/primary-status.txt" 2>/dev/null || echo 'status=unreachable')
+          restore=$(cat "$RUNNER_TEMP/restore-status.txt" 2>/dev/null || echo 'status=unreachable')
+          auth_body=$(jq -nc --arg app_id "$FEISHU_APP_ID" --arg app_secret "$FEISHU_APP_SECRET" '{app_id:$app_id,app_secret:$app_secret}')
+          token=$(curl --fail-with-body --silent --show-error -X POST -H 'Content-Type: application/json' \
+            -d "$auth_body" https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal | jq -r '.tenant_access_token')
+          message=$(printf 'New API 每日备份\n\n%s\n---\n%s' "$primary" "$restore")
+          content=$(jq -nc --arg text "$message" '{text:$text}')
+          body=$(jq -nc --arg receive_id "$FEISHU_RECEIVE_ID" --arg content "$content" \
+            '{receive_id:$receive_id,msg_type:"text",content:$content}')
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d "$body" 'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id'
